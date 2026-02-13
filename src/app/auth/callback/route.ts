@@ -16,33 +16,52 @@ export async function GET(request: Request) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        const { data: workspaces } = await supabase
+        // Use upsert for profile to avoid race conditions
+        await supabase.from("profiles").upsert(
+          {
+            id: user.id,
+            full_name:
+              user.user_metadata?.full_name || user.email?.split("@")[0],
+          },
+          { onConflict: "id" }
+        );
+
+        // Check if workspace already exists (signup page may have created it)
+        const { data: existingWorkspaces } = await supabase
           .from("workspaces")
           .select("id")
-          .eq("owner_id", user.id);
+          .eq("owner_id", user.id)
+          .limit(1);
 
-        if (!workspaces || workspaces.length === 0) {
-          await supabase.from("profiles").upsert({
-            id: user.id,
-            full_name: user.user_metadata?.full_name || user.email?.split("@")[0],
-          });
-
+        if (!existingWorkspaces || existingWorkspaces.length === 0) {
           const { data: workspace } = await supabase
             .from("workspaces")
             .insert({
-              name: user.user_metadata?.full_name || user.email?.split("@")[0] || "My Workspace",
+              name:
+                user.user_metadata?.full_name ||
+                user.email?.split("@")[0] ||
+                "My Workspace",
               owner_id: user.id,
             })
             .select("id")
             .single();
 
           if (workspace) {
-            await supabase.from("subscriptions").insert({
-              workspace_id: workspace.id,
-              plan: "free",
-              credits_total: 3,
-              credits_used: 0,
-            });
+            // Check if subscription already exists before inserting
+            const { data: existingSub } = await supabase
+              .from("subscriptions")
+              .select("id")
+              .eq("workspace_id", workspace.id)
+              .limit(1);
+
+            if (!existingSub || existingSub.length === 0) {
+              await supabase.from("subscriptions").insert({
+                workspace_id: workspace.id,
+                plan: "free",
+                credits_total: 3,
+                credits_used: 0,
+              });
+            }
           }
         }
       }

@@ -1,15 +1,9 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import type { Profile, Workspace } from "@/types";
-import {
-  Users,
-  LayoutDashboard,
-  FolderOpen,
-  FileText,
-  Settings,
-} from "lucide-react";
+import type { Profile } from "@/types";
+import { Users } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
+import { WorkspaceProvider } from "@/lib/workspace-context";
 
 const navItems = [
   { label: "Dashboard", href: "/dashboard", icon: "LayoutDashboard" },
@@ -35,19 +29,16 @@ export default async function DashboardLayout({
     redirect("/login");
   }
 
-  // Fetch profile
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single();
-
-  // Fetch workspaces
-  const { data: workspaces } = await supabase
-    .from("workspaces")
-    .select("*")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true });
+  // Fetch profile and workspace for sidebar display
+  const [{ data: profile }, { data: workspaces }] = await Promise.all([
+    supabase.from("profiles").select("*").eq("id", user.id).single(),
+    supabase
+      .from("workspaces")
+      .select("*")
+      .eq("owner_id", user.id)
+      .order("created_at", { ascending: true })
+      .limit(1),
+  ]);
 
   const currentWorkspace = workspaces?.[0] ?? null;
   const userProfile = profile as Profile | null;
@@ -119,9 +110,11 @@ export default async function DashboardLayout({
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* Main content wrapped with workspace context */}
       <main className="flex-1 overflow-y-auto">
-        <div className="h-full">{children}</div>
+        <WorkspaceProvider>
+          <div className="h-full">{children}</div>
+        </WorkspaceProvider>
       </main>
     </div>
   );

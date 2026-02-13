@@ -50,7 +50,7 @@ export async function GET(
     const tagFilter = searchParams.get('tag');
 
     let query = supabase
-      .from('bucket_files')
+      .from('files')
       .select('*')
       .eq('workspace_id', params.id)
       .order('created_at', { ascending: false });

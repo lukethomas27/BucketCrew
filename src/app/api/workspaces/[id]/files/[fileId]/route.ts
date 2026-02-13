@@ -59,7 +59,7 @@ export async function PATCH(
 
     // Verify the file belongs to this workspace
     const { data: existingFile, error: fileError } = await supabase
-      .from('bucket_files')
+      .from('files')
       .select('id, workspace_id')
       .eq('id', params.fileId)
       .eq('workspace_id', params.id)
@@ -74,7 +74,7 @@ export async function PATCH(
 
     // Update tags
     const { data: updatedFile, error: updateError } = await supabase
-      .from('bucket_files')
+      .from('files')
       .update({ tags })
       .eq('id', params.fileId)
       .select('*')
@@ -143,7 +143,7 @@ export async function DELETE(
 
     // Fetch the file record to get the storage path
     const { data: fileRecord, error: fileError } = await supabase
-      .from('bucket_files')
+      .from('files')
       .select('id, storage_path, workspace_id')
       .eq('id', params.fileId)
       .eq('workspace_id', params.id)
@@ -177,7 +177,7 @@ export async function DELETE(
 
     // Delete the file record from DB
     const { error: deleteError } = await supabase
-      .from('bucket_files')
+      .from('files')
       .delete()
       .eq('id', params.fileId);
 

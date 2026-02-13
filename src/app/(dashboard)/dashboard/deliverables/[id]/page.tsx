@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useWorkspace } from "@/lib/workspace-context";
 import { formatDate } from "@/lib/utils";
 import type { Deliverable, ChecklistItem } from "@/types";
 import {
@@ -32,33 +33,17 @@ export default function DeliverableViewerPage() {
   const params = useParams();
   const deliverableId = params.id as string;
   const supabase = createClient();
+  const { workspace } = useWorkspace();
 
   const [deliverable, setDeliverable] = useState<Deliverable | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [activeSection, setActiveSection] = useState("summary");
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+
+  const workspaceId = workspace?.id ?? null;
 
   useEffect(() => {
     async function load() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        setLoading(false);
-        return;
-      }
-
-      const { data: workspace } = await supabase
-        .from("workspaces")
-        .select("id")
-        .eq("owner_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .single();
-
-      if (workspace) setWorkspaceId(workspace.id);
-
       const { data } = await supabase
         .from("deliverables")
         .select("*")

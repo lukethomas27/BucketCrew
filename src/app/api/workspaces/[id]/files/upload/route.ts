@@ -113,7 +113,7 @@ export async function POST(
 
     // Create file record in DB with processing_status: 'pending'
     const { data: fileRecord, error: insertError } = await supabase
-      .from('bucket_files')
+      .from('files')
       .insert({
         id: fileId,
         workspace_id: params.id,
@@ -143,7 +143,7 @@ export async function POST(
     try {
       // Update status to 'processing'
       await supabase
-        .from('bucket_files')
+        .from('files')
         .update({ processing_status: 'processing' })
         .eq('id', fileId);
 
@@ -202,13 +202,13 @@ export async function POST(
 
       // Update processing_status to 'ready'
       await supabase
-        .from('bucket_files')
+        .from('files')
         .update({ processing_status: 'ready' })
         .eq('id', fileId);
 
       // Re-fetch the updated record
       const { data: updatedFile } = await supabase
-        .from('bucket_files')
+        .from('files')
         .select('*')
         .eq('id', fileId)
         .single();
@@ -222,7 +222,7 @@ export async function POST(
 
       // Update processing_status to 'error'
       await supabase
-        .from('bucket_files')
+        .from('files')
         .update({
           processing_status: 'error',
           metadata: {
@@ -235,7 +235,7 @@ export async function POST(
 
       // Re-fetch the updated record
       const { data: errorFile } = await supabase
-        .from('bucket_files')
+        .from('files')
         .select('*')
         .eq('id', fileId)
         .single();

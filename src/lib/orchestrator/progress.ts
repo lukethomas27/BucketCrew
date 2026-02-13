@@ -1,16 +1,16 @@
-import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import type { ProgressEntry } from '@/types'
 
 /**
  * Append a progress entry to the workflow_runs row's progress JSONB array.
+ * Uses service role client since this runs in background (no user session).
  */
 export async function updateProgress(
   runId: string,
   entry: ProgressEntry
 ): Promise<void> {
-  const supabase = createClient()
+  const supabase = createServiceClient()
 
-  // Fetch the current progress array so we can append to it
   const { data: run, error: fetchError } = await supabase
     .from('workflow_runs')
     .select('progress')
@@ -36,7 +36,8 @@ export async function updateProgress(
 }
 
 /**
- * Update the overall status of a workflow run, along with optional result and error fields.
+ * Update the overall status of a workflow run.
+ * Uses service role client since this runs in background (no user session).
  */
 export async function updateRunStatus(
   runId: string,
@@ -44,7 +45,7 @@ export async function updateRunStatus(
   result?: any,
   error?: string
 ): Promise<void> {
-  const supabase = createClient()
+  const supabase = createServiceClient()
 
   const updatePayload: Record<string, any> = { status }
 
