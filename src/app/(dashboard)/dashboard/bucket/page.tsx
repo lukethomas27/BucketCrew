@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { createClient } from "@/lib/supabase/client";
+import { useWorkspace } from "@/lib/workspace-context";
 import type { BucketFile, FileTag } from "@/types";
 import { formatFileSize, formatDate } from "@/lib/utils";
 import {
@@ -36,6 +37,7 @@ function getTagStyle(tag: string) {
 
 export default function BucketPage() {
   const supabase = createClient();
+  const { workspace, loading: wsLoading, error: wsError } = useWorkspace();
   const [files, setFiles] = useState<BucketFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -43,43 +45,29 @@ export default function BucketPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTagFilter, setActiveTagFilter] = useState<FileTag | null>(null);
   const [tagEditFileId, setTagEditFileId] = useState<string | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
 
-  // Get workspace and files on mount
+  const workspaceId = workspace?.id ?? null;
+
+  // Fetch files when workspace is available
   useEffect(() => {
-    async function init() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
+    if (!workspaceId) {
+      if (!wsLoading) setLoading(false);
+      return;
+    }
 
-      const { data: workspace } = await supabase
-        .from("workspaces")
-        .select("id")
-        .eq("owner_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .single();
-
-      if (!workspace) {
-        setLoading(false);
-        return;
-      }
-
-      setWorkspaceId(workspace.id);
-
+    async function loadFiles() {
       const { data: filesData } = await supabase
         .from("files")
         .select("*")
-        .eq("workspace_id", workspace.id)
+        .eq("workspace_id", workspaceId)
         .order("created_at", { ascending: false });
 
       setFiles((filesData as BucketFile[]) ?? []);
       setLoading(false);
     }
 
-    init();
-  }, [supabase]);
+    loadFiles();
+  }, [workspaceId, wsLoading, supabase]);
 
   // Upload handler
   const onDrop = useCallback(

@@ -1,8 +1,10 @@
 import { v4 as uuidv4 } from 'uuid'
-import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
+import { generateQueryEmbedding } from '@/lib/rag/embeddings'
 import { createWorkflowContext } from './context'
 import { updateRunStatus } from './progress'
 import { runAgent } from './agents'
+import { getWorkflowTemplate } from '@/data/workflow-templates'
 import type {
   Deliverable,
   DeliverableContent,
@@ -40,7 +42,7 @@ export async function executeWorkflow(params: {
       template,
       userInput,
       bucketContext,
-      webResearchEnabled: false, // default; can be overridden per-workspace
+      webResearchEnabled: false,
     })
 
     // --- 4. Update run status to 'running' ---
@@ -52,10 +54,8 @@ export async function executeWorkflow(params: {
 
     for (const group of executionOrder) {
       if (group.length === 1) {
-        // Single step -- run sequentially
         await runAgent(ctx, group[0])
       } else {
-        // Parallel group -- run all steps concurrently
         await Promise.all(group.map((step) => runAgent(ctx, step)))
       }
     }
@@ -71,7 +71,6 @@ export async function executeWorkflow(params: {
 
     return deliverable
   } catch (error) {
-    // On error, mark the run as failed
     const errorMessage = error instanceof Error ? error.message : String(error)
     await updateRunStatus(runId, 'failed', undefined, errorMessage)
     throw error
@@ -83,11 +82,16 @@ export async function executeWorkflow(params: {
 // ============================================================
 
 /**
- * Load a workflow template by ID from the database.
+ * Load a workflow template. Tries the in-memory templates first (they have full
+ * step definitions), then falls back to the database.
  */
 async function loadTemplate(templateId: string): Promise<WorkflowTemplate> {
-  const supabase = createClient()
+  // In-memory templates have fully populated steps, form_fields, etc.
+  const inMemory = getWorkflowTemplate(templateId)
+  if (inMemory) return inMemory
 
+  // Fallback: load from database
+  const supabase = createServiceClient()
   const { data, error } = await supabase
     .from('workflow_templates')
     .select('*')
@@ -103,16 +107,13 @@ async function loadTemplate(templateId: string): Promise<WorkflowTemplate> {
 
 /**
  * Retrieve relevant document chunks for the workflow using vector similarity search.
- *
- * If specific fileIds are provided, the search is scoped to those files.
- * Otherwise, all files in the workspace are considered.
  */
 async function retrieveChunks(
   workspaceId: string,
   userInput: Record<string, any>,
   fileIds: string[]
 ): Promise<RetrievedChunk[]> {
-  const supabase = createClient()
+  const supabase = createServiceClient()
 
   // Build a search query from the user input fields
   const searchText = Object.values(userInput)
@@ -123,17 +124,18 @@ async function retrieveChunks(
     return []
   }
 
-  // Attempt to use a Supabase RPC for vector similarity search.
-  // If the RPC is not available, fall back to a basic text-match query.
+  // Try embedding-based vector search first
   try {
+    const embedding = await generateQueryEmbedding(searchText)
+
     const rpcParams: Record<string, any> = {
-      query_text: searchText,
+      query_embedding: embedding,
       match_workspace_id: workspaceId,
       match_count: 20,
     }
 
     if (fileIds.length > 0) {
-      rpcParams.filter_file_ids = fileIds
+      rpcParams.match_file_ids = fileIds
     }
 
     const { data, error } = await supabase.rpc('match_chunks', rpcParams)
@@ -142,14 +144,38 @@ async function retrieveChunks(
       throw error
     }
 
-    return (data || []) as RetrievedChunk[]
+    const chunks = (data || []) as any[]
+    if (chunks.length > 0) {
+      // Enrich with file names
+      const uniqueFileIds = Array.from(new Set(chunks.map((c: any) => c.file_id)))
+      const { data: files } = await supabase
+        .from('files')
+        .select('id, name')
+        .in('id', uniqueFileIds)
+
+      const fileNameMap = new Map((files || []).map((f: any) => [f.id, f.name]))
+
+      return chunks.map((row: any) => ({
+        id: row.id,
+        file_id: row.file_id,
+        workspace_id: row.workspace_id,
+        chunk_index: row.chunk_index,
+        content: row.content,
+        token_count: row.token_count,
+        metadata: row.metadata || {},
+        similarity: row.similarity,
+        file_name: fileNameMap.get(row.file_id) || row.metadata?.file_name || 'unknown',
+      }))
+    }
+
+    return []
   } catch (rpcError) {
-    // Fallback: fetch chunks directly for the given files
-    console.warn('[retrieveChunks] RPC match_chunks not available, using fallback query:', rpcError)
+    // Fallback: fetch chunks directly (no similarity ranking)
+    console.warn('[retrieveChunks] Vector search unavailable, using fallback:', rpcError)
 
     let query = supabase
       .from('file_chunks')
-      .select('*, bucket_files!inner(name)')
+      .select('*')
       .eq('workspace_id', workspaceId)
       .order('chunk_index', { ascending: true })
       .limit(20)
@@ -165,41 +191,40 @@ async function retrieveChunks(
       return []
     }
 
-    // Map to RetrievedChunk shape
-    return (data || []).map((row: any) => ({
-      id: row.id,
-      file_id: row.file_id,
-      workspace_id: row.workspace_id,
-      chunk_index: row.chunk_index,
-      content: row.content,
-      token_count: row.token_count,
-      metadata: row.metadata || {},
-      similarity: 1.0, // No real similarity score in fallback mode
-      file_name: row.bucket_files?.name || row.metadata?.file_name || 'unknown',
-    }))
+    const chunks = data || []
+    if (chunks.length > 0) {
+      const uniqueFileIds = Array.from(new Set(chunks.map((c: any) => c.file_id)))
+      const { data: files } = await supabase
+        .from('files')
+        .select('id, name')
+        .in('id', uniqueFileIds)
+
+      const fileNameMap = new Map((files || []).map((f: any) => [f.id, f.name]))
+
+      return chunks.map((row: any) => ({
+        id: row.id,
+        file_id: row.file_id,
+        workspace_id: row.workspace_id,
+        chunk_index: row.chunk_index,
+        content: row.content,
+        token_count: row.token_count,
+        metadata: row.metadata || {},
+        similarity: 1.0,
+        file_name: fileNameMap.get(row.file_id) || row.metadata?.file_name || 'unknown',
+      }))
+    }
+
+    return []
   }
 }
 
 /**
  * Group workflow steps into an ordered list of parallel groups.
- *
- * Steps with the same `parallel_group` value run concurrently within one group.
- * Steps without a parallel_group form their own single-step group.
- * Ordering respects `depends_on` by ensuring that all dependencies appear in
- * earlier groups.
  */
 function buildExecutionOrder(steps: WorkflowStep[]): WorkflowStep[][] {
   const groups: WorkflowStep[][] = []
   const executed = new Set<string>()
 
-  // Build a quick lookup for step IDs
-  const stepMap = new Map<string, WorkflowStep>()
-  for (const step of steps) {
-    stepMap.set(step.id, step)
-  }
-
-  // Collect all unique parallel_group values (preserving insertion order)
-  // Steps without a parallel_group get a unique synthetic group
   const groupOrder: string[] = []
   const groupMembers = new Map<string, WorkflowStep[]>()
   let syntheticIdx = 0
@@ -213,7 +238,6 @@ function buildExecutionOrder(steps: WorkflowStep[]): WorkflowStep[][] {
     groupMembers.get(groupKey)!.push(step)
   }
 
-  // Topological iteration: emit groups only when all their deps are satisfied
   const remaining = new Set(groupOrder)
   const maxIterations = groupOrder.length + 1
   let iterations = 0
@@ -237,7 +261,6 @@ function buildExecutionOrder(steps: WorkflowStep[]): WorkflowStep[][] {
     }
   }
 
-  // Safety: if there are still remaining groups (circular deps), push them at the end
   Array.from(remaining).forEach((groupKey) => {
     groups.push(groupMembers.get(groupKey)!)
   })
@@ -247,9 +270,6 @@ function buildExecutionOrder(steps: WorkflowStep[]): WorkflowStep[][] {
 
 /**
  * Assemble a Deliverable from the collected agent outputs.
- *
- * The editor agent's output is expected to contain the final consolidated structure.
- * If no editor output exists, we compose from the individual agent outputs.
  */
 function assembleDeliverable(
   agentOutputs: Record<string, any>,
@@ -257,13 +277,11 @@ function assembleDeliverable(
   workspaceId: string,
   bucketContext: RetrievedChunk[]
 ): Deliverable {
-  // Find the editor output (search by key containing 'editor')
   const editorKey = Object.keys(agentOutputs).find(
-    (key) => key.toLowerCase().includes('editor')
+    (key) => key.toLowerCase().includes('edit')
   )
   const editorOutput = editorKey ? agentOutputs[editorKey] : null
 
-  // Build the content from editor output, or fall back to assembling from parts
   const content: DeliverableContent = {
     executive_summary: editorOutput?.executive_summary || buildFallbackSummary(agentOutputs),
     findings: editorOutput?.findings || collectFindings(agentOutputs),
@@ -272,18 +290,15 @@ function assembleDeliverable(
     risks_assumptions: editorOutput?.risks_assumptions || [],
   }
 
-  // Build checklist
-  const rawChecklist: { text: string }[] = editorOutput?.checklist || []
+  const rawChecklist: any[] = editorOutput?.checklist || []
   const checklist: ChecklistItem[] = rawChecklist.map((item) => ({
     id: uuidv4(),
-    text: item.text,
+    text: typeof item === 'string' ? item : item.text || '',
     completed: false,
   }))
 
-  // Build sources
   const rawSources: { name: string; relevance: string }[] = editorOutput?.sources_used || []
   const sources: DeliverableSource[] = rawSources.map((src) => {
-    // Try to match source name to a bucket file
     const matchingChunk = bucketContext.find((c) => c.file_name === src.name)
     return {
       type: 'bucket' as const,
@@ -293,7 +308,6 @@ function assembleDeliverable(
     }
   })
 
-  // If no sources were listed by the editor, derive them from bucket context
   if (sources.length === 0 && bucketContext.length > 0) {
     const uniqueFiles = new Map<string, RetrievedChunk>()
     for (const chunk of bucketContext) {
@@ -326,10 +340,10 @@ function assembleDeliverable(
 }
 
 /**
- * Save the deliverable to the database.
+ * Save the deliverable to the database using service role (background task).
  */
 async function saveDeliverable(deliverable: Deliverable): Promise<void> {
-  const supabase = createClient()
+  const supabase = createServiceClient()
 
   const { error } = await supabase.from('deliverables').insert({
     id: deliverable.id,
@@ -349,7 +363,7 @@ async function saveDeliverable(deliverable: Deliverable): Promise<void> {
 }
 
 // ============================================================
-// Fallback assembly helpers (used when editor output is missing)
+// Fallback assembly helpers
 // ============================================================
 
 function buildFallbackSummary(agentOutputs: Record<string, any>): string {

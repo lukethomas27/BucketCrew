@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useWorkspace } from "@/lib/workspace-context";
 import type { Subscription, WorkspaceSettings } from "@/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ import {
 export default function SettingsPage() {
   const router = useRouter();
   const supabase = createClient();
+  const { workspace: wsData, subscription: wsSub, loading: wsLoading } = useWorkspace();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -80,38 +82,25 @@ export default function SettingsPage() {
 
       if (profile) setFullName(profile.full_name ?? "");
 
-      const { data: workspace } = await supabase
-        .from("workspaces")
-        .select("*")
-        .eq("owner_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .single();
-
-      if (workspace) {
-        setWorkspaceId(workspace.id);
-        setWorkspaceName(workspace.name);
-        const settings = (workspace.settings ?? {}) as WorkspaceSettings;
+      // Use workspace from context
+      if (wsData) {
+        setWorkspaceId(wsData.id);
+        setWorkspaceName(wsData.name);
+        const settings = (wsData.settings ?? {}) as WorkspaceSettings;
         setWebResearch(settings.web_research_enabled !== false);
         setRetentionDays(
           settings.data_retention_days?.toString() ?? "forever"
         );
-
-        const { data: sub } = await supabase
-          .from("subscriptions")
-          .select("*")
-          .eq("workspace_id", workspace.id)
-          .single();
-
-        if (sub) setSubscription(sub as unknown as Subscription);
       }
+
+      if (wsSub) setSubscription(wsSub);
 
       setLoading(false);
     }
 
-    load();
+    if (!wsLoading) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [wsLoading, wsData]);
 
   // Save profile
   async function saveProfile() {

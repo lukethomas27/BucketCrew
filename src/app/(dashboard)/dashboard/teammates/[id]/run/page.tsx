@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useWorkspace } from "@/lib/workspace-context";
 import { getWorkflowTemplate } from "@/data/workflow-templates";
 import type {
   WorkflowTemplate,
@@ -154,11 +155,12 @@ export default function RunWorkflowPage() {
   const params = useParams();
   const router = useRouter();
   const supabase = createClient();
+  const { workspace } = useWorkspace();
 
   const templateId = params.id as string;
   const template = getWorkflowTemplate(templateId);
 
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const workspaceId = workspace?.id ?? null;
   const [bucketFiles, setBucketFiles] = useState<BucketFile[]>([]);
   const [formValues, setFormValues] = useState<Record<string, any>>({});
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
@@ -169,38 +171,24 @@ export default function RunWorkflowPage() {
   // Run state
   const [activeRun, setActiveRun] = useState<WorkflowRun | null>(null);
 
-  // Init: load workspace + files
+  // Load bucket files when workspace is available
   useEffect(() => {
-    async function init() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
+    if (!workspaceId) return;
 
-      const { data: workspace } = await supabase
-        .from("workspaces")
-        .select("id")
-        .eq("owner_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .single();
-
-      if (!workspace) return;
-      setWorkspaceId(workspace.id);
-
+    async function loadFiles() {
       const { data: files } = await supabase
         .from("files")
         .select("*")
-        .eq("workspace_id", workspace.id)
+        .eq("workspace_id", workspaceId)
         .eq("processing_status", "ready")
         .order("created_at", { ascending: false });
 
       setBucketFiles((files as BucketFile[]) ?? []);
     }
 
-    init();
+    loadFiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [workspaceId]);
 
   // Poll for run progress
   useEffect(() => {
