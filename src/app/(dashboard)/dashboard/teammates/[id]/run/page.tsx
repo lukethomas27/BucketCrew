@@ -190,37 +190,61 @@ export default function RunWorkflowPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
-  // Poll for run progress
+  // Stream run progress via SSE
   useEffect(() => {
     if (!activeRun || !workspaceId) return;
     if (activeRun.status === "completed" || activeRun.status === "failed")
       return;
 
-    const interval = setInterval(async () => {
+    const evtSource = new EventSource(
+      `/api/workspaces/${workspaceId}/runs/${activeRun.id}/stream`
+    );
+
+    evtSource.onmessage = (event) => {
       try {
-        const res = await fetch(
-          `/api/workspaces/${workspaceId}/runs/${activeRun.id}`
-        );
-        if (!res.ok) return;
+        const data = JSON.parse(event.data);
 
-        const updated: WorkflowRun = await res.json();
-        setActiveRun(updated);
-
-        if (updated.status === "completed" && updated.result) {
-          clearInterval(interval);
-          router.push(`/dashboard/deliverables/${updated.result.id}`);
+        if (data.error && !data.status) {
+          console.error("[SSE] Stream error:", data.error);
+          evtSource.close();
+          return;
         }
 
-        if (updated.status === "failed") {
-          clearInterval(interval);
+        // Update the run with new progress
+        setActiveRun((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            status: data.status || prev.status,
+            progress: data.allProgress || prev.progress,
+            result: data.result || prev.result,
+            error: data.error || prev.error,
+          };
+        });
+
+        // Navigate to deliverable on completion
+        if (data.status === "completed" && data.result?.id) {
+          evtSource.close();
+          router.push(`/dashboard/deliverables/${data.result.id}`);
+        }
+
+        if (data.status === "failed") {
+          evtSource.close();
         }
       } catch {
-        // Ignore polling errors
+        // Ignore parse errors
       }
-    }, 2000);
+    };
 
-    return () => clearInterval(interval);
-  }, [activeRun, workspaceId, router]);
+    evtSource.onerror = () => {
+      // SSE will auto-reconnect, but if the run is done, close it
+      if (activeRun.status === "completed" || activeRun.status === "failed") {
+        evtSource.close();
+      }
+    };
+
+    return () => evtSource.close();
+  }, [activeRun?.id, activeRun?.status, workspaceId, router]);
 
   // Handle form field change
   function handleFieldChange(fieldId: string, value: any) {

@@ -386,6 +386,21 @@ export default function SettingsPage() {
                       <Button
                         size="sm"
                         className="mt-3 bg-indigo-600 hover:bg-indigo-500"
+                        onClick={async () => {
+                          try {
+                            const res = await fetch("/api/stripe/checkout", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ plan: "pro" }),
+                            });
+                            const data = await res.json();
+                            if (data.url) {
+                              window.location.href = data.url;
+                            }
+                          } catch {
+                            alert("Failed to start checkout. Please try again.");
+                          }
+                        }}
                       >
                         Upgrade to Pro &mdash; $29/mo
                       </Button>

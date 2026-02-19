@@ -46,6 +46,12 @@ export default async function DashboardPage() {
     );
   }
 
+  // Redirect to onboarding if not completed
+  const wsSettings = (workspace.settings ?? {}) as Record<string, unknown>;
+  if (!wsSettings.onboarding_completed) {
+    redirect("/dashboard/onboarding");
+  }
+
   // Fetch counts and data in parallel
   const [filesResult, deliverablesResult, subscriptionResult] =
     await Promise.all([
